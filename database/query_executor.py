@@ -8,7 +8,6 @@ import logging
 from .connection import DatabaseConnection
 from .query_cache import QueryCache
 
-# Set up logging
 logger = logging.getLogger(__name__)
 
 
@@ -40,12 +39,10 @@ class QueryExecutor:
         Returns:
             DataFrame with query results
         """
-        # Determine if cache should be used for this query
+
         should_use_cache = self.use_cache if use_cache is None else use_cache
         
-        # Check cache first if enabled
         if should_use_cache:
-            # If a cache_key is provided, use it to generate a deterministic cache key
             if cache_key:
                 cache_key_str = f"{cache_key}_{str(params) if params else ''}"
                 cached_result = self.cache.get(cache_key_str, None)
@@ -56,16 +53,16 @@ class QueryExecutor:
                 logger.info(f"Using cached result for query: {cache_key or query[:50]}...")
                 return cached_result
         
-        # Execute query if no cache hit
+
         try:
             cursor = self.db_connection.get_cursor(dictionary=True)
             cursor.execute(query, params or ())
             
-            # Convert results to DataFrame
+
             results = cursor.fetchall()
             df = pd.DataFrame(results)
             
-            # Cache results if enabled
+
             if should_use_cache and not df.empty:
                 if cache_key:
                     cache_key_str = f"{cache_key}_{str(params) if params else ''}"
@@ -96,7 +93,6 @@ class QueryExecutor:
             cursor.execute(query, params or ())
             self.db_connection.connection.commit()
             
-            # Invalidate cache because data has changed
             if self.use_cache:
                 self.cache.invalidate()
             

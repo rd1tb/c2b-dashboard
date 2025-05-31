@@ -16,7 +16,6 @@ def display_total_revenue_quantity(category_sales: pd.DataFrame):
         st.info("No sales data available for the selected criteria.")
         return
     
-    # Display total revenue and total products sold metrics
     col1, col2 = st.columns(2)
     with col1:
         total_revenue = category_sales['sales_amount'].sum()

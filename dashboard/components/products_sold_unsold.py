@@ -5,7 +5,6 @@ import streamlit as st
 import pandas as pd
 
 
-@st.cache_data(ttl=7200, show_spinner=False)
 def calculate_product_metrics(products_sold: pd.DataFrame, filtered_sales: pd.DataFrame, total_products: int):
     """
     Calculate product metrics with caching.
@@ -26,13 +25,10 @@ def calculate_product_metrics(products_sold: pd.DataFrame, filtered_sales: pd.Da
             "products_not_sold": 0
         }
     
-    # Get unique products sold (after discount filtering)
     unique_products_sold = filtered_sales['sku'].nunique()
     
-    # Calculate products not sold
     products_not_sold = total_products - unique_products_sold
-    
-    # Get products sold only once
+
     product_order_counts = filtered_sales.groupby('sku')['order_id'].nunique().reset_index()
     single_order_products = len(product_order_counts[product_order_counts['order_id'] == 1])
     
@@ -57,10 +53,9 @@ def display_products_sold_unsold(products_sold: pd.DataFrame, filtered_sales: pd
         st.info("No product data available for the selected criteria.")
         return
     
-    # Calculate metrics using cached function
+
     metrics = calculate_product_metrics(products_sold, filtered_sales, total_products)
-    
-    # Display metrics
+
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric(label="Total number of products", value=f"{metrics['total_products']:,.0f}")

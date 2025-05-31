@@ -7,7 +7,6 @@ from typing import Optional, Dict, List, Tuple
 import logging
 from .query_executor import QueryExecutor
 
-# Set up logging
 logger = logging.getLogger(__name__)
 
 
@@ -194,7 +193,7 @@ class QueryRepository:
                                        'discount_amount', 'duration_days', 'is_active'])
     
        
-    def get_category_item_sales_with_rules_ids(self, category_ids=[694, 685]) -> pd.DataFrame:
+    def get_enhanced_category_item_sales(self, category_ids=[694, 685]) -> pd.DataFrame:
         """
         Get sales data for specific product categories.
         
@@ -547,3 +546,74 @@ class QueryRepository:
             return pd.DataFrame(columns=['rule_id', 'name', 'from_date', 'to_date', 
                                         'discount_amount', 'ctb_discount_amount', 'ctb_units_used',
                                         'ctb_limit_units', 'ctb_limit_discount', 'ctb_discount_used'])
+        
+    def get_enhanced_category_item_sales(self, category_ids=[694, 685]) -> pd.DataFrame:
+        """
+        Get enhanced sales data for specific product categories with additional customer and product info.
+        
+        Args:
+            category_ids: List of category IDs to include in the report (default: [694, 685])
+            
+        Returns:
+            DataFrame with enhanced category sales data including customer info and brand_id
+        """
+        category_ids_str = ', '.join(map(str, category_ids))
+        
+        # Clear previous cache for this query type
+        old_cache_key = f"category_item_sales_{'-'.join(map(str, sorted(category_ids)))}"
+        cache_key = f"enhanced_category_item_sales_{'-'.join(map(str, sorted(category_ids)))}"
+        self.executor.cache.invalidate(old_cache_key)
+        
+        # Using a fixed salt for consistent hashing
+        email_salt = "D3xu5Gh6J9pLqP2s"
+        
+        query = f"""
+        SELECT
+            soi.sku,
+            cpei_category.value AS category_num,
+            soi.item_id,
+            soi.order_id,
+            DATE(sfo.created_at) AS order_date,
+            soi.qty_ordered,
+            soi.base_price,
+            soi.base_discount_amount,
+            soi.base_row_total_incl_tax,
+            soi.applied_rule_ids,
+            -- Additional customer information
+            sfo.customer_is_guest,
+            sfo.customer_group_id,
+            SHA2(CONCAT(sfo.customer_email, '{email_salt}'), 256) AS hashed_customer_email,
+            -- Brand ID (attribute_id = 81)
+            cpei_attr81.value AS brand_id
+        FROM
+            sales_flat_order sfo
+        JOIN
+            sales_flat_order_item soi ON sfo.entity_id = soi.order_id
+        JOIN
+            catalog_product_entity cpe ON soi.product_id = cpe.entity_id
+        JOIN
+            catalog_product_entity_int cpei_category ON cpe.entity_id = cpei_category.entity_id
+        JOIN
+            eav_attribute_option_value aov ON cpei_category.value = aov.option_id
+        -- Left join for the brand attribute (81)
+        LEFT JOIN
+            catalog_product_entity_int cpei_attr81 ON cpe.entity_id = cpei_attr81.entity_id AND cpei_attr81.attribute_id = 81
+        WHERE
+            sfo.increment_id NOT LIKE 'EBAY%'
+            AND sfo.increment_id NOT LIKE 'AMZ%'
+            AND cpei_category.attribute_id = 168
+            AND aov.store_id = 0
+            AND cpei_category.value IN ({category_ids_str})
+        """
+        
+        try:
+            logger.info("Running enhanced category sales report")
+            return self.executor.execute_query(query, cache_key=cache_key)
+        except Exception as e:
+            logger.error(f"Error getting enhanced category sales data: {str(e)}")
+            return pd.DataFrame(columns=['sku', 'category_num', 'item_id', 'order_id',
+                                    'order_date', 'qty_ordered', 'base_price',
+                                    'base_discount_amount', 'base_row_total_incl_tax', 
+                                    'applied_rule_ids', 'customer_is_guest', 
+                                    'customer_group_id', 'hashed_customer_email',
+                                    'brand_id'])

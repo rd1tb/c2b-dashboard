@@ -10,7 +10,7 @@ from pathlib import Path
 import json
 import datetime
 
-# Set up logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,7 +39,6 @@ class QueryExporter:
             Unique filename with timestamp
         """
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Replace spaces and special characters with underscores
         clean_name = "".join(c if c.isalnum() else "_" for c in base_name)
         return f"{clean_name}_{timestamp}.{file_format}"
     
@@ -68,15 +67,12 @@ class QueryExporter:
             logger.warning("Cannot export empty DataFrame")
             return None
             
-        # Generate base name if not provided
         base_name = filename or "query_export"
         
-        # Generate full filename with timestamp
         full_filename = self._generate_filename(base_name, format)
         file_path = self.export_dir / full_filename
         
         try:
-            # Export based on format
             if format.lower() == "csv":
                 df.to_csv(file_path, index=include_index, **kwargs)
             elif format.lower() in ["excel", "xlsx"]:
@@ -125,16 +121,12 @@ class QueryExporter:
             Path to the exported file
         """
         try:
-            # Execute query
             result_df = query_executor.execute_query(query, params)
             
-            # Generate filename if not provided
             if filename is None:
-                # Use first 30 chars of query as filename, cleaned up
                 query_snippet = query.strip().split('\n')[0][:30]
                 filename = "".join(c if c.isalnum() or c.isspace() else "_" for c in query_snippet)
             
-            # Add metadata if requested
             if include_metadata and format.lower() in ["csv", "excel", "xlsx"]:
                 metadata_df = pd.DataFrame([
                     ["Query", query.replace('\n', ' ')],
@@ -143,10 +135,8 @@ class QueryExporter:
                     ["Row Count", len(result_df)]
                 ], columns=["Metadata", "Value"])
                 
-                # Add empty row as separator
                 separator = pd.DataFrame([["", ""]], columns=metadata_df.columns)
                 
-                # Combine metadata with results
                 combined_df = pd.concat([metadata_df, separator, result_df.reset_index(drop=True)])
                 return self.export_dataframe(combined_df, filename=filename, format=format, **kwargs)
             
@@ -190,18 +180,13 @@ class QueryExporter:
             method_args = method_args or {}
             result = repo_method(**method_args)
             
-            # Use method name as filename if not provided
             if filename is None:
                 filename = method_name
             
-            # Check if result is a DataFrame, if not, convert it to one
             if not isinstance(result, pd.DataFrame):
-                # For scalar values (int, float, string, etc.)
                 if not hasattr(result, '__iter__') or isinstance(result, (str, bytes)):
-                    # Create a simple one-row DataFrame with the result
                     result_df = pd.DataFrame({method_name: [result]})
                 else:
-                    # For other iterables (list, tuple, etc.)
                     result_df = pd.DataFrame(result)
             else:
                 result_df = result

@@ -5,7 +5,6 @@ from typing import Dict, Optional
 from pathlib import Path
 import logging
 
-# Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -27,7 +26,7 @@ class DatabaseConnection:
             "database": "Care2Beauty"
         }
         self.connection = None
-        
+      
     def connect(self, username: str, password: str) -> None:
         """
         Connect to the database.

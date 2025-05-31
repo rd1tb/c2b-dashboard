@@ -11,12 +11,12 @@ from pathlib import Path
 import hashlib
 from decimal import Decimal
 
-# Set up logging
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 class SalesSensitivityCache:
-    """Cache for processed sales sensitivity data."""
+    """Cache for processed sales sensitivity data with customer type filtering."""
     
     def __init__(self, cache_dir: str = "cache/sales_sensitivity", max_age_hours: int = 24):
         """Initialize the sales sensitivity cache."""
@@ -25,10 +25,8 @@ class SalesSensitivityCache:
     
     def _get_cache_key(self, filter_params: Dict[str, Any]) -> str:
         """Generate a unique cache key based on filter parameters."""
-        # Sort the keys to ensure consistent cache keys
         sorted_params = sorted(filter_params.items())
         
-        # Convert filter params to string representation
         param_strings = []
         for key, value in sorted_params:
             if isinstance(value, list):
@@ -62,7 +60,6 @@ class SalesSensitivityCache:
         if not cache_path.exists():
             return None
             
-        # Load cached result
         try:
             with open(cache_path, 'rb') as f:
                 result = pickle.load(f)
@@ -93,20 +90,16 @@ def process_applied_rule_ids(rule_ids_str: str) -> List[int]:
     # Split by comma
     rule_id_parts = str(rule_ids_str).split(',')
     
-    # Process each part - remove 'c-' prefix and convert to int
     rule_ids = []
     for part in rule_id_parts:
         try:
-            # Remove 'c-' prefix if exists
             clean_part = part.strip()
             if clean_part.startswith('c-'):
                 clean_part = clean_part[2:]
             
-            # Convert to integer
             rule_id = int(clean_part)
             rule_ids.append(rule_id)
         except (ValueError, TypeError):
-            # Skip invalid values
             continue
     
     return rule_ids
@@ -131,16 +124,13 @@ def get_selected_products(
     if sales_df.empty or 'sku' not in sales_df.columns or 'base_row_total_incl_tax' not in sales_df.columns:
         return []
     
-    # Calculate total revenue per product
     product_revenue = sales_df.groupby('sku')['base_row_total_incl_tax'].sum().reset_index()
     
-    # Skip products with zero or negative revenue
     product_revenue = product_revenue[product_revenue['base_row_total_incl_tax'] > 0]
     
     if product_revenue.empty:
         return []
     
-    # Select products based on method
     if selection_method == "top_revenue":
         selected_products = product_revenue.sort_values('base_row_total_incl_tax', ascending=False)
     elif selection_method == "least_revenue":
@@ -148,7 +138,6 @@ def get_selected_products(
     elif selection_method == "random":
         selected_products = product_revenue.sample(min(len(product_revenue), max_products))
     else:
-        # Default to top revenue
         selected_products = product_revenue.sort_values('base_row_total_incl_tax', ascending=False)
     
     return selected_products.head(max_products)['sku'].tolist()
@@ -181,9 +170,11 @@ def calculate_sales_sensitivity(
     promotion_df: pd.DataFrame,
     filter_years: List[int] = None,
     filter_category_ids: List[int] = None,
+    filter_customer_types: List[str] = None,
+    filter_customer_status: List[str] = None,
     max_products: int = 50,
     selection_method: str = "top_revenue",
-    use_cache: bool = False  # Changed default to False to avoid using potentially corrupted cache
+    use_cache: bool = True
 ) -> pd.DataFrame:
     """
     Calculate product sensitivity to different discount levels.
@@ -193,6 +184,8 @@ def calculate_sales_sensitivity(
         promotion_df: DataFrame with promotion details
         filter_years: Years to filter by
         filter_category_ids: Category IDs to filter by
+        filter_customer_types: Customer types to filter by (Guest/Registered)
+        filter_customer_status: Customer status to filter by (New/Returning)
         max_products: Maximum products to analyze
         selection_method: Method to select products
         use_cache: Whether to use cached results
@@ -200,7 +193,6 @@ def calculate_sales_sensitivity(
     Returns:
         DataFrame with sales sensitivity data
     """
-    # Helper function to get max discount from rule IDs
     def get_max_discount(rule_ids, discount_map):
         """Get the highest discount amount from a list of rule IDs."""
         if not rule_ids:
@@ -208,9 +200,8 @@ def calculate_sales_sensitivity(
         discounts = []
         for rule_id in rule_ids:
             discount_value = discount_map.get(rule_id, 0)
-            # Explicitly handle Decimal values
             try:
-                if hasattr(discount_value, 'to_eng_string'):  # Check if it's a Decimal
+                if hasattr(discount_value, 'to_eng_string'):
                     discount_value = float(discount_value.to_eng_string())
                 else:
                     discount_value = float(discount_value)
@@ -219,17 +210,17 @@ def calculate_sales_sensitivity(
                 discounts.append(0.0)
         return max(discounts) if discounts else 0.0
     
-    # Create filter parameters for cache key
     filter_params = {
         'years': filter_years,
         'category_ids': filter_category_ids,
+        'customer_types': filter_customer_types,
+        'customer_status': filter_customer_status,
         'max_products': max_products,
         'selection_method': selection_method
     }
     
     start_time = time.time()
     
-    # Check cache first if enabled
     cache = SalesSensitivityCache()
     if use_cache:
         cached_result = cache.get(filter_params)
@@ -238,55 +229,42 @@ def calculate_sales_sensitivity(
             logger.info(f"Retrieved from cache in {time.time() - start_time:.2f} seconds")
             return cached_result
     
-    # Make a copy of the sales data
     sales_df_copy = sales_df.copy()
     
-    # Ensure all decimal columns are converted to float - fix for decimal.Decimal * float error
     for col in sales_df_copy.columns:
         if col in ['qty_ordered', 'base_row_total_incl_tax', 'base_price', 'base_discount_amount']:
-            # These columns specifically need float conversion
             try:
-                # Handle Decimal values explicitly
                 sales_df_copy[col] = sales_df_copy[col].apply(
                     lambda x: float(x.to_eng_string()) if hasattr(x, 'to_eng_string') else float(x) 
                     if x is not None and not pd.isna(x) else 0.0
                 )
             except Exception as e:
                 logger.warning(f"Error converting column {col} to float: {str(e)}")
-                # Try standard conversion as fallback
                 try:
                     sales_df_copy[col] = sales_df_copy[col].astype(float)
                 except:
                     pass
         elif sales_df_copy[col].dtype.name == 'object':
-            # Try to convert object columns that might contain Decimal values
             try:
                 sales_df_copy[col] = sales_df_copy[col].astype(float)
             except (ValueError, TypeError):
-                # Skip columns that can't be converted
                 pass
         elif hasattr(sales_df_copy[col], 'astype'):
-            # Convert any numeric-like column to float
             try:
                 sales_df_copy[col] = sales_df_copy[col].astype(float)
             except (ValueError, TypeError):
-                # Skip columns that can't be converted
                 pass
     
-    # Convert discount_amount in promotion_df to float
     promotion_df = promotion_df.copy()
     for col in promotion_df.columns:
         if col == 'discount_amount':
-            # Special handling for discount_amount column which is critical
             try:
-                # Handle Decimal values explicitly
                 promotion_df[col] = promotion_df[col].apply(
                     lambda x: float(x.to_eng_string()) if hasattr(x, 'to_eng_string') else float(x) 
                     if x is not None and not pd.isna(x) else 0.0
                 )
             except Exception as e:
                 logger.warning(f"Error converting discount_amount to float: {str(e)}")
-                # Try standard conversion as fallback
                 try:
                     promotion_df[col] = promotion_df[col].astype(float)
                 except:
@@ -301,100 +279,103 @@ def calculate_sales_sensitivity(
                 promotion_df[col] = promotion_df[col].astype(float)
             except (ValueError, TypeError):
                 pass
-    
-    # Filter by years if specified
+
+
     if filter_years and 'order_date' in sales_df_copy.columns:
-        # Convert to datetime if not already
         if not pd.api.types.is_datetime64_any_dtype(sales_df_copy['order_date']):
             sales_df_copy['order_date'] = pd.to_datetime(sales_df_copy['order_date'])
             
         sales_df_copy = sales_df_copy[sales_df_copy['order_date'].dt.year.isin(filter_years)]
     
-    # Filter by categories if specified
     if filter_category_ids and 'category_num' in sales_df_copy.columns:
         sales_df_copy = sales_df_copy[sales_df_copy['category_num'].isin(filter_category_ids)]
     
-    # Check if we have enough data
+    if filter_customer_types and 'customer_is_guest' in sales_df_copy.columns and 'customer_group_id' in sales_df_copy.columns:
+        if 'Guest' in filter_customer_types and 'Registered' in filter_customer_types:
+            pass
+        elif 'Guest' in filter_customer_types:
+            sales_df_copy = sales_df_copy[sales_df_copy['customer_is_guest'] == 1]
+        elif 'Registered' in filter_customer_types:
+            sales_df_copy = sales_df_copy[sales_df_copy['customer_group_id'].isin([1, 2, 7, 8, 9])]
+        else:
+            logger.warning("No customer types selected, returning empty result")
+            return pd.DataFrame()
+    
+    if filter_customer_status and 'hashed_customer_email' in sales_df_copy.columns:
+        if 'New' in filter_customer_status and 'Returning' in filter_customer_status:
+            pass
+        elif len(filter_customer_status) > 0:
+            customer_order_counts = sales_df_copy.groupby('hashed_customer_email')['order_id'].nunique().reset_index()
+            customer_order_counts.columns = ['hashed_customer_email', 'unique_order_count']
+            
+            new_customers = set(customer_order_counts[customer_order_counts['unique_order_count'] == 1]['hashed_customer_email'].tolist())
+            returning_customers = set(customer_order_counts[customer_order_counts['unique_order_count'] > 1]['hashed_customer_email'].tolist())
+            
+            if 'New' in filter_customer_status and not 'Returning' in filter_customer_status:
+                sales_df_copy = sales_df_copy[sales_df_copy['hashed_customer_email'].isin(new_customers)]
+            elif 'Returning' in filter_customer_status and not 'New' in filter_customer_status:
+                sales_df_copy = sales_df_copy[sales_df_copy['hashed_customer_email'].isin(returning_customers)]
+            elif not filter_customer_status:
+                logger.warning("No customer status selected, returning empty result")
+                return pd.DataFrame()
+    
     if sales_df_copy.empty:
         logger.warning("No sales data after filtering")
         return pd.DataFrame()
     
-    # Get selected products
     selected_products = get_selected_products(sales_df_copy, max_products, selection_method)
     if not selected_products:
         logger.warning("No products found with the selected criteria")
         return pd.DataFrame()
     
-    # Filter sales to selected products
     sales_df_copy = sales_df_copy[sales_df_copy['sku'].isin(selected_products)]
     
-    # Parse applied rule IDs
     sales_df_copy['rule_ids_list'] = sales_df_copy['applied_rule_ids'].apply(process_applied_rule_ids)
     
-    # Create a mapping of rule_id to discount_amount
     rule_discount_map = {}
     if 'rule_id' in promotion_df.columns and 'discount_amount' in promotion_df.columns:
-        # Ensure both columns are properly converted to appropriate types
         try:
-            # Convert rule_id to int
             rule_ids = promotion_df['rule_id'].apply(
                 lambda x: int(x) if x is not None and not pd.isna(x) else 0
             ).tolist()
             
-            # Convert discount_amount to float with special handling for Decimal
             discount_amounts = promotion_df['discount_amount'].apply(
                 lambda x: float(x.to_eng_string()) if hasattr(x, 'to_eng_string') else float(x) 
                 if x is not None and not pd.isna(x) else 0.0
             ).tolist()
             
-            # Create the mapping
             rule_discount_map = dict(zip(rule_ids, discount_amounts))
         except Exception as e:
             logger.warning(f"Error creating rule_discount_map: {str(e)}")
-            # Fallback to original approach
             rule_discount_map = dict(zip(promotion_df['rule_id'], promotion_df['discount_amount']))
     
-    # Add a column with the highest discount for each sale
     sales_df_copy['max_discount'] = sales_df_copy['rule_ids_list'].apply(
         lambda rule_ids: get_max_discount(rule_ids, rule_discount_map)
     )
     
-    # Add discount bucket column
     sales_df_copy['discount_bucket'] = sales_df_copy['max_discount'].apply(get_discount_bucket)
     
-    # Add order date for counting unique days
     if not pd.api.types.is_datetime64_any_dtype(sales_df_copy['order_date']):
         sales_df_copy['order_date'] = pd.to_datetime(sales_df_copy['order_date'])
     
-    # Extract just the date part (no time)
     sales_df_copy['sale_date'] = sales_df_copy['order_date'].dt.date
     
-    # Prepare results structure
     sensitivity_data = []
+    products_only_with_discounts = []
     
-    # Process each product
     for sku in selected_products:
-        # Get all sales for this product
         product_sales = sales_df_copy[sales_df_copy['sku'] == sku]
         if product_sales.empty:
             continue
         
-        # Get baseline sales (no promotions)
         baseline_sales = product_sales[product_sales['rule_ids_list'].apply(lambda x: len(x) == 0)]
         
-        # Get the number of unique days with baseline sales
         baseline_days = len(baseline_sales['sale_date'].unique()) if not baseline_sales.empty else 0
         
-        # Set minimum days to 1 to avoid division by zero
-        if baseline_days == 0:
-            baseline_days = 1
-            
-        # Get total quantity without promotions - explicitly convert to float
         try:
             if not baseline_sales.empty:
                 qty_sum = baseline_sales['qty_ordered'].sum()
-                # Handle if the sum is a Decimal
-                if hasattr(qty_sum, 'to_eng_string'):  # Check if it's a Decimal
+                if hasattr(qty_sum, 'to_eng_string'):
                     baseline_qty = float(qty_sum.to_eng_string())
                 else:
                     baseline_qty = float(qty_sum)
@@ -404,24 +385,22 @@ def calculate_sales_sensitivity(
             logger.warning(f"Error converting qty_ordered sum to float: {str(e)}")
             baseline_qty = 0.0
         
-        # Calculate daily baseline qty (normalize by days)
-        daily_baseline_qty = baseline_qty / baseline_days
+        daily_baseline_qty = baseline_qty / baseline_days if baseline_days > 0 else 0
         
-        # If no baseline sales, set baseline to a small number to avoid division by zero
+        if daily_baseline_qty == 0 and not product_sales.empty:
+            products_only_with_discounts.append(sku)
+            continue
+            
         if daily_baseline_qty == 0:
-            daily_baseline_qty = 0.01  # Avoid division by zero
+            daily_baseline_qty = 0.01
         
-        # Get all sales with promotions
         all_promo_sales = product_sales[product_sales['rule_ids_list'].apply(lambda x: len(x) > 0)]
         
-        # Process the "Overall" category (all promotions)
         if not all_promo_sales.empty:
-            # Number of unique days with any promotion
             overall_promo_days = len(all_promo_sales['sale_date'].unique())
             if overall_promo_days == 0:
                 overall_promo_days = 1
                 
-            # Get total promotional quantity sold
             try:
                 overall_qty_sum = all_promo_sales['qty_ordered'].sum()
                 if hasattr(overall_qty_sum, 'to_eng_string'):
@@ -432,13 +411,10 @@ def calculate_sales_sensitivity(
                 logger.warning(f"Error converting overall qty_ordered sum to float: {str(e)}")
                 overall_promo_qty = 0.0
                 
-            # Calculate daily promo qty
             daily_overall_promo_qty = overall_promo_qty / overall_promo_days
             
-            # Calculate sensitivity ratio using daily quantities
             overall_sensitivity_ratio = daily_overall_promo_qty / daily_baseline_qty
             
-            # Add overall category to results
             sensitivity_data.append({
                 'sku': sku,
                 'discount_bucket': "Overall",
@@ -449,21 +425,16 @@ def calculate_sales_sensitivity(
                 'promo_days': overall_promo_days
             })
         
-        # Get sales with promotions grouped by discount bucket
         promo_sales = product_sales[product_sales['rule_ids_list'].apply(lambda x: len(x) > 0)]
         
-        # Group by discount bucket
         if not promo_sales.empty:
             for bucket in promo_sales['discount_bucket'].unique():
-                # Get sales for this bucket
                 bucket_sales = promo_sales[promo_sales['discount_bucket'] == bucket]
                 
-                # Count unique days for this bucket
                 bucket_days = len(bucket_sales['sale_date'].unique())
                 if bucket_days == 0:
                     bucket_days = 1
                 
-                # Get total quantity sold in this bucket
                 try:
                     bucket_qty_sum = bucket_sales['qty_ordered'].sum()
                     if hasattr(bucket_qty_sum, 'to_eng_string'):
@@ -474,13 +445,10 @@ def calculate_sales_sensitivity(
                     logger.warning(f"Error converting bucket qty_ordered to float: {str(e)}")
                     bucket_promo_qty = 0.0
                 
-                # Calculate daily promo qty for this bucket
                 daily_bucket_promo_qty = bucket_promo_qty / bucket_days
                 
-                # Calculate sensitivity ratio using daily quantities
                 bucket_sensitivity_ratio = daily_bucket_promo_qty / daily_baseline_qty
                 
-                # Add to results
                 sensitivity_data.append({
                     'sku': sku,
                     'discount_bucket': bucket,
@@ -491,7 +459,6 @@ def calculate_sales_sensitivity(
                     'promo_days': bucket_days
                 })
         
-        # Fill in default values of 1 for buckets with no data
         all_buckets = ["≤15%", "20%", "25%", "30%", "≥35%", "Overall"]
         existing_buckets = [row['discount_bucket'] for row in sensitivity_data if row['sku'] == sku]
         
@@ -502,15 +469,17 @@ def calculate_sales_sensitivity(
                     'discount_bucket': bucket,
                     'baseline_qty': float(daily_baseline_qty),
                     'promo_qty': 0.0,
-                    'sensitivity_ratio': 1.0,  # Default to 1 (no effect) when no data
+                    'sensitivity_ratio': 1.0,
                     'baseline_days': baseline_days,
                     'promo_days': 0
                 })
     
-    # Convert to DataFrame
     result_df = pd.DataFrame(sensitivity_data)
     
-    # Cache the result if enabled
+    if not result_df.empty:
+        result_df.attrs['products_only_with_discounts'] = products_only_with_discounts
+        result_df.attrs['count_products_only_with_discounts'] = len(products_only_with_discounts)
+    
     if use_cache and not result_df.empty:
         cache.set(filter_params, result_df)
         logger.info(f"Cached result with {len(result_df)} records in {time.time() - start_time:.2f} seconds")
@@ -531,72 +500,75 @@ def create_sensitivity_distribution_chart(sensitivity_data: pd.DataFrame) -> go.
     if sensitivity_data.empty or 'discount_bucket' not in sensitivity_data.columns or 'sensitivity_ratio' not in sensitivity_data.columns:
         return None
     
-    # Fixed bucket order with "Overall" first
-    bucket_order = ["Overall", "≤15%", "20%", "25%", "30%", "≥35%"]
+    bucket_order = ["≤15%", "20%", "25%", "30%", "≥35%", "Overall"]
     
-    # Create the figure
     fig = go.Figure()
     
-    # Define colors for each bucket
     bucket_colors = {
-        "Overall": "rgb(31,119,180)",  # Blue for overall
-        "≤15%": "rgb(44,160,44)",      # Green
-        "20%": "rgb(214,39,40)",       # Red
-        "25%": "rgb(148,103,189)",     # Purple
-        "30%": "rgb(140,86,75)",       # Brown
-        "≥35%": "rgb(227,119,194)"     # Pink
+        "≤15%": "rgb(34,139,34)",
+        "20%": "rgb(178,34,34)",
+        "25%": "rgb(106,90,205)",
+        "30%": "rgb(139,69,19)",
+        "≥35%": "rgb(199,21,133)",
+        "Overall": "rgb(0,0,139)"
     }
     
-    # Add violin plots for each bucket
     for bucket in bucket_order:
         bucket_data = sensitivity_data[sensitivity_data['discount_bucket'] == bucket]
         
         if not bucket_data.empty:
-            # Add violin plot for this bucket
             color = bucket_colors.get(bucket, "rgb(8,81,156)")
-            fill_color = f"rgba{color[3:-1]}, 0.4)"  # Convert to rgba with 0.4 opacity
             
-            fig.add_trace(go.Violin(
-                y=bucket_data['sensitivity_ratio'].clip(upper=10),  # Cap at 10x for better visibility
+            fig.add_trace(go.Box(
+                y=bucket_data['sensitivity_ratio'].clip(upper=10),
                 name=bucket,
-                box_visible=True,
-                meanline_visible=True,
-                points="all",
-                pointpos=0,
-                jitter=0.05,
                 marker=dict(
-                    opacity=0.6,
-                    size=4,
-                    color=color
+                    color=color,
+                    opacity=0.95,
+                    size=10,
+                    outliercolor=color,
+                    symbol='circle'
                 ),
-                line_color=color,
-                fillcolor=fill_color if bucket != "Overall" else f"rgba{color[3:-1]}, 0.6)",
-                hoverinfo='y',
-                hovertemplate=f'Discount: {bucket}<br>Sensitivity Ratio: %{{y:.2f}}<extra></extra>'
+                line=dict(
+                    color=color,
+                    width=5
+                ),
+                boxpoints='outliers',
+                hoverlabel=dict(
+                    font_size=30,
+                    font=dict()
+                ),
             ))
     
     # Update layout
     fig.update_layout(
         title="Product Sensitivity to Discounts (Normalized by Days)",
+        plot_bgcolor='#F5F5F5',
+        paper_bgcolor='#F5F5F5',
         xaxis=dict(
             title="Discount",
-            tickfont=dict(size=12),
-            # Use discount bucket labels directly
+            title_font=dict(size=28, color='rgba(0, 0, 0, 1)', weight='bold'),
+            tickfont=dict(size=24, color='rgba(0, 0, 0, 1)', family='Monospace'),
             ticktext=bucket_order,
-            tickvals=list(range(len(bucket_order)))
+            tickvals=list(range(len(bucket_order))),
+            gridcolor='rgba(0, 0, 0, 0.1)'
         ),
         yaxis=dict(
-            title="Sensitivity Ratio (Daily Promo Sales / Daily Baseline Sales)",
-            gridcolor='rgba(230, 230, 230, 0.3)',
-            tickfont=dict(size=12),
-            # Let the y-axis scale automatically
+            title="Uplift Ratio (Daily Promo Sales / Daily Baseline Sales)",
+            gridcolor='rgba(0, 0, 0, 0.1)',
+            tickfont=dict(size=24, color='rgba(0, 0, 0, 1)', family='Monospace'),
+            title_font=dict(size=28, color='rgba(0, 0, 0, 1)', weight='bold'),
             autorange=True
         ),
-        plot_bgcolor='rgba(240, 240, 240, 0.05)',
-        paper_bgcolor='rgba(0, 0, 0, 0)',
-        font=dict(color='rgba(70, 70, 70, 1)', size=12),
-        height=1000,
+        font=dict(color='rgba(0, 0, 0, 1)', size=25),
+        height=1200,
         margin=dict(l=40, r=40, t=50, b=40),
+        hoverlabel=dict(
+            font_size=32,
+            bgcolor='rgba(255, 255, 255, 0.9)',
+            bordercolor='rgba(0, 0, 0, 0.2)',
+            font=dict(color='rgba(0, 0, 0, 0.9)')
+        ),
         showlegend=False
     )
     
@@ -607,7 +579,9 @@ def display_sales_sensitivity_analysis(
     sales_df: pd.DataFrame,
     promotion_df: pd.DataFrame,
     filter_years: List[int] = None,
-    filter_category_ids: List[int] = None
+    filter_category_ids: List[int] = None,
+    filter_customer_types: List[str] = None,
+    filter_customer_status: List[str] = None
 ) -> go.Figure:
     """
     Display a sales sensitivity analysis by discount bucket.
@@ -617,27 +591,26 @@ def display_sales_sensitivity_analysis(
         promotion_df: DataFrame with promotion details
         filter_years: Years to filter by
         filter_category_ids: Category IDs to filter by
+        filter_customer_types: Customer types to filter by (Guest/Registered)
+        filter_customer_status: Customer status to filter by (New/Returning)
         
     Returns:
         Plotly figure object or None
     """
-    # Validate input data
     if sales_df.empty or promotion_df.empty:
         st.error("No sales or promotion data available.")
         return None
     
-    # Create cache manager
     cache = SalesSensitivityCache()
     
-    # Create filter container with columns (2/3 for slider, 1/3 for selection)
     col1, col2 = st.columns([2, 1])
     
     with col1:
         max_products = st.slider(
             "Number of products to analyze", 
-            min_value=20, 
-            max_value=200, 
-            value=50,
+            min_value=100, 
+            max_value=500, 
+            value=300,
             step=10,
             key="sensitivity_max_products_slider"
         )
@@ -654,34 +627,31 @@ def display_sales_sensitivity_analysis(
             key="sensitivity_product_selection"
         )
     
-    # Process and calculate sales sensitivity
     with st.spinner("Analyzing product sensitivity to discounts..."):
-        # Calculate sensitivity data
         sensitivity_data = calculate_sales_sensitivity(
             sales_df,
             promotion_df,
             filter_years=filter_years,
             filter_category_ids=filter_category_ids,
+            filter_customer_types=filter_customer_types,
+            filter_customer_status=filter_customer_status,
             max_products=max_products,
             selection_method=selection_method,
-            use_cache=True  # Use cache by default
+            use_cache=True
         )
         
         if sensitivity_data.empty:
             st.warning("No sensitivity data available for the selected filters.")
             return None
     
-    # Create and display the visualization
     with st.spinner("Generating sensitivity distribution chart..."):
-        # Create the chart
         fig = create_sensitivity_distribution_chart(sensitivity_data)
         
-        # Display the chart
         if fig is None:
             st.warning("Could not generate chart with the current data.")
             return None
             
         st.plotly_chart(fig, use_container_width=True)
-
+    
     
     return fig

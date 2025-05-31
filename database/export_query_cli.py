@@ -15,7 +15,6 @@ import logging
 from pathlib import Path
 import json
 
-# Add the project root to the Python path
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 from database import DatabaseConnection, QueryExecutor, QueryRepository
@@ -32,8 +31,7 @@ logger = logging.getLogger(__name__)
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Export database query results to files")
-    
-    # Connection parameters
+
     parser.add_argument(
         "--host",
         default="10.7.0.111",

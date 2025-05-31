@@ -7,7 +7,6 @@ import pickle
 from datetime import datetime, timedelta
 import os
 
-# Set up logging
 logger = logging.getLogger(__name__)
 
 
@@ -66,13 +65,11 @@ class QueryCache:
         if not cache_path.exists():
             return None
             
-        # Check if cache is expired
         mod_time = datetime.fromtimestamp(cache_path.stat().st_mtime)
         if datetime.now() - mod_time > self.max_age:
             logger.info(f"Cache expired for key: {key_str[:50]}...")
             return None
-            
-        # Load cached result
+
         try:
             with open(cache_path, 'rb') as f:
                 return pickle.load(f)
@@ -108,12 +105,10 @@ class QueryCache:
             params: Query parameters
         """
         if key_str is None:
-            # Invalidate all caches
             for cache_file in self.cache_dir.glob("*.pkl"):
                 cache_file.unlink(missing_ok=True)
             logger.info("All query caches invalidated")
         else:
-            # Invalidate specific query
             key = self._get_cache_key(key_str, params)
             cache_path = self._get_cache_path(key)
             if cache_path.exists():

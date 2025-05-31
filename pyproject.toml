@@ -6,9 +6,9 @@ build-backend = "setuptools.build_meta"
 packages = ["database", "dashboard"]
 
 [project]
-name = "lced-care2beauty"
+name = "c2b-dashboard"
 version = "0.1.0"
-description = "Add your description here"
+description = "Data understanding dashboard"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

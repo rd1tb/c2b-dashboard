@@ -1,5 +1,6 @@
 """
 Sales overview dashboard view with improved architecture and tabbed interface.
+Updated to include customer type filtering.
 """
 import streamlit as st
 import pandas as pd
@@ -8,7 +9,6 @@ import plotly.graph_objects as go
 import sys
 import os
 import numpy as np
-# Add the project root to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from database import QueryRepository
 from dashboard.components.monthly_sales_chart import display_monthly_sales_chart
@@ -21,39 +21,43 @@ def apply_custom_styles():
     <style>
         /* Increase size for page navigation */
         .st-emotion-cache-z5fcl4 {
-            font-size: 20px !important;
+            font-size: 22px !important;
             font-weight: bold !important;
         }
         
         /* Make tab names bigger */
         button[data-baseweb="tab"] p {
-            font-size: 18px !important;
+            font-size: 22px !important;
             font-weight: bold !important;
         }
         
         /* Increase filter caption text size */
         .st-emotion-cache-1c7y2kd {
+            font-size: 22px !important;
+        }
+        
+        [data-testid="stMetricLabel"] {
             font-size: 20px !important;
+            font-weight: bold !important;
         }
         
-        [data-testid="stMetricLabel"] > div {
-        font-size: 30px !important;
-        font-weight: bold !important;
+        [data-testid="stMetricLabel"] * {
+            font-size: inherit !important;
+            font-weight: inherit !important;
         }
         
-        /* Make metric values bigger */
         [data-testid="stMetricValue"] {
             font-size: 40px !important;
         }
     
         div[class*="stSlider"] > label > div[data-testid="stMarkdownContainer"] > p {
-        font-size: 18px;
+            font-size: 20px;
         }
         div[class*="stSelectbox"] > label > div[data-testid="stMarkdownContainer"] > p {
-        font-size: 18px;
+            font-size: 20px;
         }
         div[class*="stSelectbox"] .st-bf {
-        font-size: 16px;
+            font-size: 18px;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -61,6 +65,7 @@ def apply_custom_styles():
 def display_sales_view(query_repo: QueryRepository):
     """
     Display sales overview section with tabbed interface.
+    Updated to include customer type filtering.
     
     Args:
         query_repo: Query repository instance
@@ -68,28 +73,28 @@ def display_sales_view(query_repo: QueryRepository):
     apply_custom_styles()
     st.header("Sales Overview")
     
-    # Get selected filters from session state
     selected_years = st.session_state.selected_years
     selected_category_ids = st.session_state.selected_category_ids
     are_discounts_selected = st.session_state.selected_discounts
+    selected_customer_types = st.session_state.selected_customer_types
+    selected_customer_status = st.session_state.selected_customer_status
     
-    # Display filter information
     year_str = ", ".join(map(str, selected_years))
     category_str = ", ".join(st.session_state.selected_category_names)
-    st.caption(f"Filtered by Years: {year_str} | Categories: {category_str}")
+    customer_type_str = ", ".join(selected_customer_types)
+    customer_status_str = ", ".join(selected_customer_status)
     
-    # Get the sales data first
+    st.caption(f"Filtered by Years: {year_str} | Categories: {category_str} | Customer Types: {customer_type_str} | Customer Status: {customer_status_str}")
+    
     try:
-        category_sales_df = query_repo.get_category_item_sales_with_rules_ids()
+        category_sales_df = query_repo.get_enhanced_category_item_sales()
         
-        # Filter data by selected categories
         if selected_category_ids:
             category_sales_df = category_sales_df[category_sales_df['category_num'].isin(selected_category_ids)]
         
         if not are_discounts_selected:
             category_sales_df = category_sales_df[category_sales_df['base_discount_amount'] == 0]
         
-        # Convert dates to datetime and filter by selected years
         if not category_sales_df.empty:
             category_sales_df['order_date'] = pd.to_datetime(category_sales_df['order_date'])
             if selected_years:
@@ -98,32 +103,47 @@ def display_sales_view(query_repo: QueryRepository):
             if not are_discounts_selected:
                 category_sales_df = category_sales_df[category_sales_df['base_discount_amount'] <= 0]
             
-            # Calculate sales amount (total minus discount)
             category_sales_df['sales_amount'] = category_sales_df['base_row_total_incl_tax'] - category_sales_df['base_discount_amount']
             
-            # Display revenue and quantity metrics (always on top)
+            if 'Guest' in selected_customer_types and 'Registered' in selected_customer_types:
+                pass
+            elif 'Guest' in selected_customer_types:
+                category_sales_df = category_sales_df[category_sales_df['customer_is_guest'] == 1]
+            elif 'Registered' in selected_customer_types:
+                category_sales_df = category_sales_df[category_sales_df['customer_group_id'].isin([1, 2, 7, 8, 9])]
+            else:
+                category_sales_df = category_sales_df.head(0)
+                
+            if selected_customer_status and not category_sales_df.empty:
+                customer_order_counts = category_sales_df.groupby('hashed_customer_email')['order_id'].nunique().reset_index()
+                customer_order_counts.columns = ['hashed_customer_email', 'unique_order_count']
+                
+                new_customers = set(customer_order_counts[customer_order_counts['unique_order_count'] == 1]['hashed_customer_email'].tolist())
+                returning_customers = set(customer_order_counts[customer_order_counts['unique_order_count'] > 1]['hashed_customer_email'].tolist())
+                
+                if 'New' in selected_customer_status and 'Returning' in selected_customer_status:
+                    pass
+                elif 'New' in selected_customer_status:
+                    category_sales_df = category_sales_df[category_sales_df['hashed_customer_email'].isin(new_customers)]
+                elif 'Returning' in selected_customer_status:
+                    category_sales_df = category_sales_df[category_sales_df['hashed_customer_email'].isin(returning_customers)]
+                else:
+                    category_sales_df = category_sales_df.head(0)
+            
             display_total_revenue_quantity(category_sales_df)
-            
-            # Add some spacing
             st.write("")
-            
-            # Create tabs for visualizations
             tabs = st.tabs([
                 "Monthly Sales Trend",
                 "Sales Growth Rate",
                 "Sales Decomposition"
             ])
             
-            # Tab 1: Monthly Sales Trend
             with tabs[0]:
-                st.subheader("Monthly Sales Trend")
                 display_monthly_sales_chart(category_sales_df)
             
-            # Tab 2: Sales Growth Rate
             with tabs[1]:
                 display_sales_growth_rate(category_sales_df)
             
-            # Tab 3: Sales Decomposition
             with tabs[2]:
                 display_time_series_decomposition(category_sales_df)
             

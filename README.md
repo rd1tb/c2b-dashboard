@@ -1,7 +1,7 @@
 ## Project Structure
 
 ```
-lced-care2beauty
+c2b-dashboard
 │
 ├── database/
 │   ├── __init__.py
@@ -38,8 +38,8 @@ lced-care2beauty
 ## Getting Started
 
 ```
-git clone https://github.com/rd1tb/lced-care2beauty.git
-cd lced-care2beauty
+git clone https://github.com/rd1tb/c2b-dashboard.git
+cd c2b-dashboard
 ```
 
 ### Installation
